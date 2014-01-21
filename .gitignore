@@ -1,0 +1,8 @@
+/*.sln
+/*.suo
+/AptorDevice/bin
+/AptorDevice/obj
+/AptorDevice/Properties
+/AptorDevice/*.csproj
+*~
+/Part/*.blend1
