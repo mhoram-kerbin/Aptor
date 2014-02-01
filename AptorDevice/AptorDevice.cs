@@ -33,13 +33,23 @@ namespace Aptor
 {
     public class AptorDevice : PartModule
     {
+
         private struct ascentpoint
         {
-            double time;
-            double pitch;
-            double thrust;
+            public double time;
+            public double pitch;
+            public double thrust;
+            public double posX;
+            public double posY;
+            public double posZ;
+            public double velX;
+            public double velY;
+            public double velZ;
+            public double thrX;
+            public double thrY;
+            public double thrZ;
         } ;
-        private List<ascentpoint> ascent;
+        private List<ascentpoint> ascent = new List<ascentpoint>();
 
         private static int _globalId = 0;
         private static int globalId { get { return _globalId++; } }
@@ -56,10 +66,9 @@ namespace Aptor
         private volatile bool socketInAction = false;
         private volatile bool stopSocketAction = false;
         private volatile bool computationFinished = false;
-        private volatile string errorString = "";
         private volatile string logging = "";
 
-        private int targetPort = 55556;
+        private string targetPortString = "55556";
         private byte[] targetIp = new byte[4] { 127, 0, 0, 1 };
 
         private Thread socketWorkerThread;
@@ -91,9 +100,10 @@ namespace Aptor
                     onEditorAttachPart();
                 }
             }
-            else
+            else if (HighLogic.LoadedSceneIsFlight)
             {
-                //log("OnStart PI not in editor");
+                log("OnStart In Flight");
+                part.OnJustAboutToBeDestroyed = onFlightDestroyPart;
             }
         }
         public override void OnUpdate() // called every frame while in Flightmode
@@ -119,6 +129,16 @@ namespace Aptor
             }
         }
         private void onEditorDestroyPart()
+        {
+            //log("onEditorDestroyPart");
+            _isAttached = false;
+            if (_isPrimaryAptorDevice)
+            {
+                updateGlobalPrimaryAptorDeviceStatus();
+            }
+        }
+
+        private void onFlightDestroyPart()
         {
             //log("onEditorDestroyPart");
             _isAttached = false;
@@ -284,6 +304,20 @@ namespace Aptor
                 log("Send Socket");
             }
 
+            targetPortString = GUILayout.TextField(targetPortString, 5);
+            if (computationFinished)
+            {
+                if (GUILayout.Button("Log Pitch Thrust", GUILayout.ExpandWidth(false)))
+                {
+                    string lo = "";
+                    for (int i = 0; i < ascent.Count; i++)
+                    {
+                        lo += i + ": " + Math.Round(100 * ascent[i].thrust, 1) + "% / " + Math.Round(ascent[i].pitch, 1) + "°\n";
+                    }
+                    log(lo);
+                }
+            }
+
             GUILayout.EndVertical();
 
             GUI.DragWindow(new Rect(0, 0, 10000, 20));
@@ -302,15 +336,17 @@ namespace Aptor
             RocketSpec.Rocket r = rs.getRocketSpec();
             for (int s = r.stages.Count - 1; s >= 0; s--)
             {
-                if (r.engines.Count > 0)
+                bool first = true;
+                foreach (RocketSpec.Engine e in r.engines)
                 {
-                    socketCommands.Add("ADD_STAGE " + r.stages[s].initialMass + " " + r.stages[s].fuelMass + " " + r.stages[s].drag);
-                    foreach (RocketSpec.Engine e in r.engines)
+                    if (e.ignitionStage >= s && e.burnoutStage <= s)
                     {
-                        if (e.ignitionStage >= s && e.burnoutStage <= s)
+                        if (first)
                         {
-                            socketCommands.Add("ADD_ENGINE " + e.thrust + " " + e.isp0 + " " + e.ispV);
+                            first = false;
+                            socketCommands.Add("ADD_STAGE " + r.stages[s].initialMass + " " + r.stages[s].fuelMass + " " + r.stages[s].drag);
                         }
+                        socketCommands.Add("ADD_ENGINE " + e.thrust + " " + e.isp0 + " " + e.ispV);
                     }
                 }
             }
@@ -319,7 +355,7 @@ namespace Aptor
             socketCommands.Add("LAUNCH_LONGITUDE 0");
             socketCommands.Add("LAUNCH_ALTITUDE 77.6");
             socketCommands.Add("MAX_VELOCITY 10000");
-            socketCommands.Add("NAME |" + EditorLogic.fetch.shipNameField.Text);
+            socketCommands.Add("NAME " + EditorLogic.fetch.shipNameField.Text);
             socketCommands.Add("TARGET_PERIAPSIS 75000");
             socketCommands.Add("ITERATIONS 40");
             socketCommands.Add("SET_NODES 9 18");
@@ -327,7 +363,6 @@ namespace Aptor
             socketCommands.Add("NLP_TOLERANCE 1.0e-5");
             socketCommands.Add("COMPUTE");
             socketCommands.Add("POSTPROCESS");
-            socketCommands.Add("GET_PITCH_THRUST 0");
 
             string res = "";
             foreach (string s in socketCommands)
@@ -345,6 +380,7 @@ namespace Aptor
             if (!socketInAction)
             {
                 socketInAction = true;
+                computationFinished = false;
                 // I perform the socket operation
                 SocketTalker st = new SocketTalker();
                 st.ad = this;
@@ -370,7 +406,8 @@ namespace Aptor
             IPAddress ipa;
             IPEndPoint targetEndpoint;
             IPEndPoint localEndpoint;
-    
+
+
             private void log(string res)
             {
                 ad.logging += "\nADST: " + res;
@@ -383,9 +420,10 @@ namespace Aptor
             public void doSocketWork()
             {
                 ipa = new IPAddress(ad.targetIp);
-                targetEndpoint = new IPEndPoint(ipa, ad.targetPort);
-                localEndpoint = new IPEndPoint(ipa, ad.targetPort+1);
-                log("init socket " + ad.targetIp + ":" + ad.targetPort);
+                int targetPort = Convert.ToInt32(ad.targetPortString);
+                targetEndpoint = new IPEndPoint(ipa, targetPort);
+                localEndpoint = new IPEndPoint(ipa, targetPort+1);
+                log("init socket " + ad.targetIp + ":" + targetPort);
                 localSocket = null;
                 try
                 {
@@ -432,72 +470,48 @@ namespace Aptor
                         log("Connection OK");
                         foreach (string c in socketCommands)
                         {
-                            log("sending ..." + c);
-                            byte[] buffer = Encoding.ASCII.GetBytes(c);
                             try
                             {
-                                localSocket.Send(buffer, c.Length, SocketFlags.None);
-                            }
-                            catch (ArgumentNullException e)
-                            {
-                                log("ArgumentNullException " + e.Message);
-                            }
-                            catch (ArgumentOutOfRangeException e)
-                            {
-                                log("ArgumentOutOfRangeException " + e.Message);
-                            }
-                            catch (SocketException e)
-                            {
-                                log("SocketException " + e.ErrorCode);
+                                string res = send(c);
                             }
                             catch (ObjectDisposedException e)
                             {
                                 endThis = true;
-                                log("ObjectDisposedException " + e.Message);
+                                log("S ObjectDisposedException " + e.Message);
                             }
-                            log("sending done ... receiving");
-                            byte[] rcvBuffer = new byte[4096];
-                            int len;
-                            try
-                            {
-                                len = localSocket.Receive(rcvBuffer, 4096 ,SocketFlags.None);
-                                string res = System.Text.Encoding.ASCII.GetString(rcvBuffer, 0, len);
-                                log("Received: \"" + res + "\"");
-                            }
-                            catch (ArgumentNullException e)
-                            {
-                                log("ArgumentNullException " + e.Message);
-                            }
-                            catch (SocketException e)
-                            {
-                                log("SocketException " + e.ErrorCode);
-                            }
-                            catch (ObjectDisposedException e)
-                            {
-                                log("ObjectDisposedException (socket closed) " + e.Message);
-                                endThis = true;
-                            }
-                            catch (System.Security.SecurityException e)
-                            {
-                                log("SecurityException" + e.Message);
-                            }
-                            log("receiving done");
 
                             if (endThis)
                             {
-                                log("beakting");
+                                log("breaking");
                                 break;
                             }
                             else
                             {
                                 if (ad.stopSocketAction)
                                 {
-                                    log("beakting");
+                                    log("breaking");
                                     break;
                                 }
                             }
                         }
+                        string times = send("GET_FINAL_TIMES");
+                        List<string> tim = times.Split(' ').ToList();
+                        double total = Convert.ToDouble(tim[tim.Count - 1]);
+                        log("total = " + total);
+                        ad.ascent = new List<ascentpoint>();
+                        for (int t = 0; t <= Convert.ToInt32(Math.Floor(total)); t++)
+                        {
+                            string p = send("GET_PITCH_THRUST " + t);
+                            List<string> pl = p.Split(' ').ToList();
+                            log("in pt " + t + " " + pl[0] + " " + pl[1] + " (" + p + ")\n");
+                            ascentpoint aP = new ascentpoint();
+                            aP.time = t;
+                            aP.thrust = Convert.ToDouble(pl[0]);
+                            aP.pitch = Convert.ToDouble(pl[1]);
+                            ad.ascent.Add(aP);
+                        }
                         localSocket.Shutdown(SocketShutdown.Both);
+                        ad.computationFinished = true;
                     }
                     else
                     {
@@ -509,12 +523,53 @@ namespace Aptor
                 log("Shutting down");
                 ad.socketInAction = false;
                 ad.joinMe = true;
+                ad.computationFinished = true;
             }
 
-            private void send(string c)
+            private string send(string c)
             {
-                log("sending " + c);
-
+                string res = "";
+                log("sending ..." + c);
+                byte[] buffer = Encoding.ASCII.GetBytes(c);
+                try
+                {
+                    localSocket.Send(buffer, c.Length, SocketFlags.None);
+                }
+                catch (ArgumentNullException e)
+                {
+                    log("S ArgumentNullEx;ception " + e.Message);
+                }
+                catch (ArgumentOutOfRangeException e)
+                {
+                    log("S ArgumentOutOfRangeException " + e.Message);
+                }
+                catch (SocketException e)
+                {
+                    log("S SocketException " + e.ErrorCode);
+                }
+                log("sending done ... receiving");
+                byte[] rcvBuffer = new byte[4096];
+                int len;
+                try
+                {
+                    len = localSocket.Receive(rcvBuffer, 4096, SocketFlags.None);
+                    res = System.Text.Encoding.ASCII.GetString(rcvBuffer, 0, len);
+                    log("Received: \"" + res + "\"");
+                }
+                catch (ArgumentNullException e)
+                {
+                    log("R ArgumentNullException " + e.Message);
+                }
+                catch (SocketException e)
+                {
+                    log("R SocketException " + e.ErrorCode);
+                }
+                catch (System.Security.SecurityException e)
+                {
+                    log("R SecurityException" + e.Message);
+                }
+                log("receiving done");
+                return res;
             }
 
             private void initSocket()

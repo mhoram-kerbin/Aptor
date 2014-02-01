@@ -6,3 +6,4 @@
 /AptorDevice/*.csproj
 *~
 /Part/*.blend1
+*~*.TMP
