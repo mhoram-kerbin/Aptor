@@ -29,17 +29,6 @@ namespace Aptor
 {
     static class Utility
     {
-        static public List<Part> getPartList()
-        {
-            if (HighLogic.LoadedSceneIsEditor)
-            {
-                return EditorLogic.SortedShipList;
-            }
-            else
-            {
-                throw new NotImplementedException("AD else branch of getPartList");
-            }
-        }
 
     }
 }

@@ -29,6 +29,11 @@ namespace Aptor
 {
     class RocketSpec
     {
+        private Part root;
+        public RocketSpec(Part rootPart)
+        {
+            root = rootPart;
+        }
         static private void log(string res)
         {
             Debug.Log("ADRS: " + res);
@@ -98,7 +103,6 @@ namespace Aptor
 
             rocket.stages.Clear();
             rocket.engines.Clear();
-            Part root = getRoot();
             if (root == null)
             {
                 log("root is null!!! should not be");
@@ -220,15 +224,6 @@ namespace Aptor
             rocket.stages[stageForMass] = s;
         }
 
-        public Part getRoot()
-        {
-            List<Part> pl = Utility.getPartList();
-            if (pl != null) {
-                return pl.First();
-            } else {
-                return null;
-            }
-        }
         public void Print()
         {
             string res = "";
